@@ -1,0 +1,108 @@
+file -f -new;
+
+proc string[] getTransform(string $shape[]) {
+    string $transform[];
+    for ($node in $shape) {
+        if ( "transform" != `nodeType $node` ) {
+            // If given node is already a transform, just pass on through
+            string $parents[] = `listRelatives -fullPath -parent $node`;
+            appendStringArray($transform, $parents, size($parents));
+        }
+    }
+    return $transform;
+}
+
+proc string pathpart( string $path )
+{
+	$path =  substituteAllString ($path, "\\", "/");
+	string $dir = match( "^.*/", $path );
+
+	int $sz = size( $dir );
+	if ( ( $sz > 1 ) && ( substring( $dir, $sz, $sz ) == "/" ) ) {
+		$dir = substring( $dir, 1, ($sz - 1) );
+	}
+	return $dir;
+}
+
+proc string filepart( string $path )
+{
+	string $filepart = match( "[^/\\]*$", $path );
+	return $filepart;
+}
+
+proc string filepartnoext (string $path)
+{
+	string $returnvalue = match("^[^.]*", match("[^(\\/)]*$", $path));
+	return $returnvalue;
+}
+
+proc string partitioncount (string $path)
+{
+	string $returnvalue = match("[0-9]+$", $path);
+	return $returnvalue;
+}
+
+
+string $fileFilters = "Thinkbox XMesh (*.xmesh)";
+string $filePath[] = `fileDialog2 -caption "Select One XMesh File From A Sequoia Hacksaw Sequence..." -dialogStyle 2  -fileMode 1 -fileFilter $fileFilters -okCaption "OK" `; //-startingDirectory $startingDirectory
+
+$dir = pathpart($filePath[0]);
+
+if (size($dir)) 
+{
+	$filepart = (filepart($filePath[0]));
+	$filepattern = `substitute "_[0-9]+of" $filepart "_*of"`;
+	$allFiles = `getFileList -filespec $filepattern -folder $dir`;
+	$allFiles = `sort $allFiles`;
+	$pcount = partitioncount(filepartnoext($filepart));
+	print ("// LOADING "+$pcount+" PARTITIONS... //\n");
+
+	int $i = 0;
+	for ($i=0; $i < size($allFiles); $i++)
+	{
+		string $cmd = "import createXMeshLoader; createXMeshLoader.createXMeshLoaderFromPath('" + $dir+"/"+$allFiles[$i] + "')";
+		python($cmd);
+		$xmesh = `ls -sl`;
+		disconnectAttr time1.outTime ($xmesh[0]+".inTime");
+
+	    
+		$texture = `getFileList -filespec (filepartnoext($allFiles[$i])+".png") -folder $dir`; 
+		if (!size($texture))
+		{
+			$texture = `getFileList -filespec (filepartnoext($allFiles[$i])+".jpg") -folder $dir`; 
+		}
+		if (!size($texture))
+		{
+			$texture = `getFileList -filespec (filepartnoext($allFiles[$i])+".exr") -folder $dir`; 
+		}
+		if (size($texture))
+		{ 
+			python("createXMeshLoader.disconnectAllShaders(createXMeshLoader.sequenceXMeshGetMeshNode('"+$xmesh[0]+"'))");
+		
+			string $xmeshName = filepartnoext($allFiles[$i])+"_";
+			string $shaderName = "Lambert_"+$xmeshName;
+			createNode "lambert" -n $shaderName;
+			
+			string $fileName = "File_"+$xmeshName;
+			createNode "file" -n $fileName;
+			setAttr -type "string" ($fileName+".fileTextureName") $texture[0];
+
+			catchQuiet (`disconnectAttr ($fileName+".outColor") ($shaderName+".color")`);
+			connectAttr -f ($fileName+".outColor") ($shaderName+".color");
+
+			catchQuiet (`disconnectAttr ($fileName+".outColor") ($shaderName+".incandescence")`);
+			connectAttr -f ($fileName+".outColor") ($shaderName+".incandescence");
+			
+			string $lambertSG = ($shaderName+"SG");
+			sets -renderable true -noSurfaceShader true -empty -name $lambertSG;
+			select $xmesh;
+
+			catchQuiet (`disconnectAttr ($shaderName+".outColor") ($lambertSG+".surfaceShader")`);
+			defaultNavigation -connectToExisting -source $shaderName -destination $lambertSG;
+			$xmeshTransform = getTransform($xmesh);
+			select $xmeshTransform;
+			catchQuiet (`sets -e -forceElement $lambertSG`);
+		}
+	}	
+}
+
